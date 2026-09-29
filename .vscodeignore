@@ -1,5 +1,6 @@
 .vscode/**
 .git/**
+.githooks/**
 Claude outputs/**
 src/**
 install/**

@@ -2,7 +2,7 @@
   "name": "ai-coauthoring-tracker",
   "displayName": "AI Co-Authoring Tracker",
   "description": "Tracks AI-assisted edits in a repository and supports automatic co-author trailers via Git hooks. Requires the GitHub CLI (gh) for PR attribution summaries.",
-  "version": "0.0.43",
+  "version": "0.0.45",
   "publisher": "CodeMaman",
   "icon": "images/avatar.png",
   "galleryBanner": {
@@ -258,7 +258,7 @@
   "scripts": {
     "build": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "package": "vsce package",
+    "package": "vsce package --no-rewrite-relative-links",
     "build-install": "npm run build && rm -rf install/*.vsix && npm run package && mkdir -p install && mv *.vsix install/",
     "lint": "echo \"No lint configured\""
   },

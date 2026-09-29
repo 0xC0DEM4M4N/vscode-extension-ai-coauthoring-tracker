@@ -143,6 +143,14 @@ let debugOutputChannel;
 let claudeSignalWatcher = null;
 let headWatcher = null;
 let gitOperationWatcher = null;
+let remoteRefWatcher = null;
+let remoteRefDebounceTimer;
+let prAutoUpdateRunning = false;
+let prAutoUpdatePending = false;
+let prAutoUpdateFailureShown = false;
+// Whether the current branch has an OPEN pull request, as last reported by `gh` (via the
+// attribution script's pr-status mode). "unknown" until the first async check finishes.
+let prState = "unknown";
 let lastGitOperationAt = 0;
 // Set once in activate(). Fallback source for scripts/ai-coauthoring-install/ when the
 // workspace repo doesn't ship its own copy -- see findInstallHooksScript/findAttributionHookScript.
@@ -719,6 +727,9 @@ function onBranchChanged(repoRoot, previousBranch, newBranch) {
     loadCharStatsForBranch(repoRoot, newBranch);
     renderStatsStatusBar();
     statsTreeProvider.refresh();
+    prState = "unknown";
+    refreshActionsPanel();
+    void refreshPrState(repoRoot);
 }
 // Attributes ai/paste characters to `provider` when known, "unknown" otherwise. Manual chars
 // are always provider-agnostic.
@@ -1111,6 +1122,7 @@ function getActionsPanelHtml(nonce, webview, extensionUri) {
     font-size: 0.85em;
     font-family: var(--vscode-font-family, sans-serif);
   }
+  button[hidden] { display: none !important; }
   button[data-command]:hover { background: var(--vscode-list-hoverBackground); }
   button[data-command]:active { background: var(--vscode-list-activeSelectionBackground); }
   button[data-command] .codicon {
@@ -1217,7 +1229,8 @@ ${providerRadiosHtml}
       <div class="btn-row">
       <button data-command="aiCoauthoringTracker.previewCommitTrailer"><i class="codicon codicon-eye"></i>Preview commit trailer</button>
       <button data-command="aiCoauthoringTracker.previewPrSummary"><i class="codicon codicon-eye"></i>Preview PR summary</button>
-      <button data-command="aiCoauthoringTracker.createOrUpdatePullRequest"><i class="codicon codicon-git-pull-request"></i>Create or update PR</button>
+      <button id="btn-create-pr" data-command="aiCoauthoringTracker.createPullRequest"><i class="codicon codicon-git-pull-request-create"></i>Create PR</button>
+      <button id="btn-update-pr" data-command="aiCoauthoringTracker.updatePullRequest"><i class="codicon codicon-git-pull-request"></i>Update PR description</button>
       <button data-command="aiCoauthoringTracker.reinstallHooksForThisRepo"><i class="codicon codicon-sync"></i>Reinstall/update git hooks</button>
       <button data-command="aiCoauthoringTracker.listInstalledRepos"><i class="codicon codicon-list-unordered"></i>Repos with hooks installed</button>
       </div>
@@ -1243,7 +1256,7 @@ ${providerRadiosHtml}
         <li>Start coding. Auto-detect picks up large AI-applied edits on its own -- or start a session manually from the Session section above if you want every keystroke attributed to a specific provider.</li>
         <li>Keep an eye on the summary card at the top -- it updates live as you type, no need to run anything.</li>
         <li>Commit as normal. An <code>AI-Coauthoring:</code> trailer is added to the commit message automatically, once hooks are installed.</li>
-        <li>Opening a PR? Run <strong>Preview PR summary</strong> first to check the numbers, then <strong>Create or update PR</strong> when you're happy with it.</li>
+        <li>Opening a PR? Run <strong>Preview PR summary</strong> first to check the numbers, then <strong>Create PR</strong> (or <strong>Update PR description</strong> once a PR exists) when you're happy with it. After that, pushing the branch refreshes the PR description automatically.</li>
         <li>Comparing work across branches? <strong>Open branch report</strong> lays every branch side by side.</li>
       </ol>
       <p class="help-note" style="margin: 10px 0 4px;"><strong>Attribution looking wrong?</strong> Turn this on, reproduce the edit, then check the "AI Co-Authoring Tracker Debug" output channel for exactly what was seen and why.</p>
@@ -1284,7 +1297,16 @@ ${providerRadiosHtml}
 
   window.addEventListener("message", function (event) {
     const msg = event.data;
-    if (!msg || msg.type !== "update") return;
+    if (!msg) return;
+    if (msg.type === "prState") {
+      // Unknown (gh not checked yet / unavailable): show both, so nothing is hidden by a failed check.
+      const createBtn = document.getElementById("btn-create-pr");
+      const updateBtn = document.getElementById("btn-update-pr");
+      if (createBtn) createBtn.hidden = msg.state === "open";
+      if (updateBtn) updateBtn.hidden = msg.state === "none";
+      return;
+    }
+    if (msg.type !== "update") return;
     applyUpdate(msg.payload);
   });
 
@@ -1352,6 +1374,7 @@ class AiCoauthoringTrackerPanelProvider {
                 // only just finished attaching its message listener, so THIS is the first moment a
                 // postMessage is guaranteed to land rather than be silently dropped.
                 this.postSummary();
+                this.postPrState();
                 return;
             }
             if (message?.type === "runCommand" &&
@@ -1366,6 +1389,9 @@ class AiCoauthoringTrackerPanelProvider {
                 this.view = undefined;
         });
         this.postSummary();
+    }
+    postPrState() {
+        void this.view?.webview.postMessage({ type: "prState", state: prState });
     }
     postSummary() {
         if (!this.view)
@@ -1387,6 +1413,7 @@ AiCoauthoringTrackerPanelProvider.viewType = "aiCoauthoringTrackerActionsPanel";
 let actionsPanelProvider;
 function refreshActionsPanel() {
     actionsPanelProvider?.postSummary();
+    actionsPanelProvider?.postPrState();
 }
 class AiStatsTreeDataProvider {
     constructor() {
@@ -2591,49 +2618,215 @@ function previewPrSummary() {
         vscode.window.showErrorMessage(`Failed to preview PR attribution summary: ${detail.trim()}`);
     }
 }
-// Creates a PR for the current branch (if none exists) or updates the existing one, inserting
-// or refreshing an AI-attribution block in its description via `gh`. This is the one command
-// in this extension that actually mutates GitHub state, so it asks for explicit confirmation
-// first and surfaces whatever `gh` itself reports on failure (not authenticated, no remote,
-// network error, etc.) rather than swallowing it.
-async function createOrUpdatePullRequest() {
+// Shared checks for every PR command; shows the reason and returns null if any fails.
+function prPreflight(action) {
     const repoRoot = getRepoRoot();
     if (!repoRoot) {
-        vscode.window.showInformationMessage("Open a Git repository to create or update a pull request.");
-        return;
+        vscode.window.showInformationMessage(`Open a Git repository to ${action}.`);
+        return null;
     }
     if (!isGhCliAvailable()) {
         vscode.window.showErrorMessage("AI Co-Authoring Tracker: the GitHub CLI (gh) is required for this. Install it and run `gh auth login` first.");
-        return;
+        return null;
     }
     if (!isNodeAvailable()) {
         vscode.window.showErrorMessage("AI Co-Authoring Tracker: Node.js is required to compute the PR attribution summary, but wasn't found on PATH.");
-        return;
+        return null;
     }
     const scriptPath = findAttributionHookScript(repoRoot);
     if (!scriptPath) {
         vscode.window.showInformationMessage("No attribution hook script found in this repository.");
-        return;
+        return null;
     }
+    flushPendingCharStats(repoRoot);
+    return { repoRoot, scriptPath };
+}
+function flushPendingCharStats(repoRoot) {
     if (statsPersistTimer && statsLoadedForBranch) {
         clearTimeout(statsPersistTimer);
         statsPersistTimer = undefined;
         persistCharStatsNow(repoRoot, statsLoadedForBranch);
     }
-    const confirmation = await vscode.window.showWarningMessage("This runs `gh pr create` or `gh pr edit` for the current branch, inserting an AI attribution summary into the pull request description on GitHub. Continue?", { modal: true }, "Continue");
+}
+function runAttributionScriptAsync(scriptPath, repoRoot, mode) {
+    return new Promise((resolve, reject) => {
+        (0, child_process_1.execFile)("node", [scriptPath, mode], { cwd: repoRoot, encoding: "utf8", timeout: 60000 }, (error, stdout, stderr) => {
+            if (error) {
+                reject(new Error((stderr || error.message || String(error)).toString().trim()));
+            }
+            else {
+                resolve(stdout.toString().trim());
+            }
+        });
+    });
+}
+// Asks `gh` (via the attribution script) whether the current branch has an OPEN PR, caches the
+// answer, and pushes it to the panel so it shows "Create PR" or "Update PR description".
+// Silent on failure (gh missing/unauthenticated/offline): state stays "unknown" and both show.
+async function refreshPrState(repoRoot) {
+    if (!isGhCliAvailable() || !isNodeAvailable())
+        return;
+    const scriptPath = findAttributionHookScript(repoRoot);
+    if (!scriptPath)
+        return;
+    const branchAtStart = getCurrentBranchCached(repoRoot);
+    try {
+        const out = await runAttributionScriptAsync(scriptPath, repoRoot, "pr-status");
+        if (getCurrentBranchCached(repoRoot) !== branchAtStart)
+            return; // branch changed meanwhile
+        prState = JSON.parse(out).exists ? "open" : "none";
+    }
+    catch (error) {
+        debugLog(`PR status check failed: ${error.message}`);
+        prState = "unknown";
+    }
+    actionsPanelProvider?.postPrState();
+}
+// Creates a PR for the current branch. Never edits an existing one, and asks for explicit
+// confirmation first because it mutates GitHub state.
+async function createPullRequest() {
+    const ctx = prPreflight("create a pull request");
+    if (!ctx)
+        return;
+    await refreshPrState(ctx.repoRoot);
+    if (prState === "open") {
+        vscode.window.showInformationMessage("A pull request already exists for this branch -- use \"Update PR description\" instead.");
+        return;
+    }
+    const confirmation = await vscode.window.showWarningMessage("This runs `gh pr create` for the current branch, with an AI attribution summary in the pull request description. Continue?", { modal: true }, "Continue");
     if (confirmation !== "Continue")
         return;
     try {
-        const output = (0, child_process_1.execFileSync)("node", [scriptPath, "update-pr"], { cwd: repoRoot, encoding: "utf8" });
+        const output = await runAttributionScriptAsync(ctx.scriptPath, ctx.repoRoot, "create-pr");
         statsOutputChannel.clear();
-        statsOutputChannel.appendLine(output.trim());
+        statsOutputChannel.appendLine(output);
         statsOutputChannel.show(true);
-        vscode.window.showInformationMessage("AI Co-Authoring Tracker: pull request updated with the attribution summary.");
+        vscode.window.showInformationMessage("AI Co-Authoring Tracker: pull request created with the attribution summary. It will now refresh automatically whenever you push this branch.");
     }
     catch (error) {
-        const err = error;
-        const detail = (err.stderr ? err.stderr.toString() : err.message) ?? String(error);
-        vscode.window.showErrorMessage(`Failed to create/update the pull request: ${detail.trim()}`);
+        vscode.window.showErrorMessage(`Failed to create the pull request: ${error.message}`);
+    }
+    await refreshPrState(ctx.repoRoot);
+}
+// Updates the AI-attribution block on the branch's existing PR. Never creates a PR.
+async function updatePullRequest() {
+    const ctx = prPreflight("update a pull request");
+    if (!ctx)
+        return;
+    try {
+        const output = await runAttributionScriptAsync(ctx.scriptPath, ctx.repoRoot, "update-pr-only");
+        statsOutputChannel.clear();
+        statsOutputChannel.appendLine(output);
+        statsOutputChannel.show(true);
+        if (output.startsWith("No open pull request")) {
+            prState = "none";
+            actionsPanelProvider?.postPrState();
+            vscode.window.showInformationMessage("There's no open pull request for this branch yet -- use \"Create PR\" first.");
+        }
+        else {
+            prState = "open";
+            actionsPanelProvider?.postPrState();
+            vscode.window.showInformationMessage("AI Co-Authoring Tracker: pull request description updated.");
+        }
+    }
+    catch (error) {
+        vscode.window.showErrorMessage(`Failed to update the pull request: ${error.message}`);
+    }
+}
+// Command Palette entry point: does whichever of create/update applies to this branch.
+async function createOrUpdatePullRequest() {
+    const repoRoot = getRepoRoot();
+    if (repoRoot)
+        await refreshPrState(repoRoot);
+    if (prState === "open") {
+        await updatePullRequest();
+    }
+    else {
+        await createPullRequest();
+    }
+}
+// ---- Automatic PR refresh after push ------------------------------------------------------
+//
+// Git has no post-push hook, but a successful push (from the terminal, VS Code, GitKraken,
+// anywhere) updates the remote-tracking ref .git/refs/remotes/<remote>/<branch>. Watching that
+// is the reliable "push finished" signal. On it, refresh the attribution block on the current
+// branch's existing OPEN PR -- update-only, NEVER creating a PR.
+function autoUpdatePrOnPushEnabled() {
+    return vscode.workspace.getConfiguration("aiCoauthoringTracker").get("autoUpdatePrOnPush", true);
+}
+function startRemoteRefWatcher(repoRoot) {
+    if (remoteRefWatcher)
+        return;
+    const remotesDir = path.join(getCachedGitDir(repoRoot), "refs", "remotes");
+    try {
+        remoteRefWatcher = fs.watch(remotesDir, { recursive: true }, (_eventType, filename) => {
+            if (!filename)
+                return;
+            const ref = filename.toString().replace(/\\/g, "/");
+            if (ref.endsWith(".lock"))
+                return;
+            const branch = getCurrentBranchCached(repoRoot);
+            const slash = ref.indexOf("/");
+            if (slash === -1 || ref.slice(slash + 1) !== branch)
+                return; // another branch / remote HEAD
+            if (remoteRefDebounceTimer)
+                clearTimeout(remoteRefDebounceTimer);
+            remoteRefDebounceTimer = setTimeout(() => void autoUpdatePrAfterPush(repoRoot), 3000);
+        });
+    }
+    catch {
+        // refs/remotes missing (no remote yet) or not watchable -- auto-update just won't fire.
+    }
+}
+function stopRemoteRefWatcher() {
+    remoteRefWatcher?.close();
+    remoteRefWatcher = null;
+    if (remoteRefDebounceTimer) {
+        clearTimeout(remoteRefDebounceTimer);
+        remoteRefDebounceTimer = undefined;
+    }
+}
+async function autoUpdatePrAfterPush(repoRoot) {
+    if (!autoUpdatePrOnPushEnabled())
+        return;
+    if (prAutoUpdateRunning) {
+        prAutoUpdatePending = true;
+        return;
+    }
+    if (!isGhCliAvailable() || !isNodeAvailable())
+        return;
+    const scriptPath = findAttributionHookScript(repoRoot);
+    if (!scriptPath)
+        return;
+    prAutoUpdateRunning = true;
+    try {
+        flushPendingCharStats(repoRoot);
+        debugLog("push detected: refreshing the AI attribution block on this branch's PR (update-only)");
+        const output = await runAttributionScriptAsync(scriptPath, repoRoot, "update-pr-only");
+        debugLog(`auto PR update: ${output}`);
+        prAutoUpdateFailureShown = false;
+        if (output.startsWith("No open pull request")) {
+            prState = "none";
+        }
+        else {
+            prState = "open";
+            vscode.window.setStatusBarMessage("$(git-pull-request) AI attribution updated on PR", 5000);
+        }
+        actionsPanelProvider?.postPrState();
+    }
+    catch (error) {
+        debugLog(`auto PR update failed: ${error.message}`);
+        if (!prAutoUpdateFailureShown) {
+            prAutoUpdateFailureShown = true;
+            vscode.window.showWarningMessage(`AI Co-Authoring Tracker: couldn't auto-update the PR after push. ${error.message}`);
+        }
+    }
+    finally {
+        prAutoUpdateRunning = false;
+        if (prAutoUpdatePending) {
+            prAutoUpdatePending = false;
+            void autoUpdatePrAfterPush(repoRoot);
+        }
     }
 }
 function activate(context) {
@@ -2678,6 +2871,8 @@ function activate(context) {
         startClaudeSignalWatcher(repoRoot);
         startHeadWatcher(repoRoot);
         startGitOperationWatcher(repoRoot);
+        startRemoteRefWatcher(repoRoot);
+        void refreshPrState(repoRoot);
     }
     renderStatsStatusBar();
     context.subscriptions.push(vscode.commands.registerCommand("aiCoauthoringTracker.selectProvider", async () => {
@@ -2758,6 +2953,12 @@ function activate(context) {
     context.subscriptions.push(vscode.commands.registerCommand("aiCoauthoringTracker.previewPrSummary", () => {
         previewPrSummary();
     }));
+    context.subscriptions.push(vscode.commands.registerCommand("aiCoauthoringTracker.createPullRequest", async () => {
+        await createPullRequest();
+    }));
+    context.subscriptions.push(vscode.commands.registerCommand("aiCoauthoringTracker.updatePullRequest", async () => {
+        await updatePullRequest();
+    }));
     context.subscriptions.push(vscode.commands.registerCommand("aiCoauthoringTracker.createOrUpdatePullRequest", async () => {
         await createOrUpdatePullRequest();
     }));
@@ -2786,6 +2987,7 @@ function deactivate() {
     stopClaudeSignalWatcher();
     stopHeadWatcher();
     stopGitOperationWatcher();
+    stopRemoteRefWatcher();
     if (statsPersistTimer)
         clearTimeout(statsPersistTimer);
     const repoRoot = getRepoRoot();

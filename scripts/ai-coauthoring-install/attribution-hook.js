@@ -242,7 +242,7 @@ function insertTrailer(messageFilePath, trailer) {
   const lines = original.split("\n");
   const commentIndex = lines.findIndex((line) => line.startsWith("#"));
 
-  const block = `\n${trailer}\n`;
+  const block = `\n\n${trailer}\n`;
   let next;
   if (commentIndex === -1) {
     next = original.replace(/\n*$/, "") + block + "\n";

@@ -2,7 +2,7 @@
 
 A VS Code extension that tracks AI-assisted edits in a Git repository — locally, per branch, no telemetry — and turns that into commit trailers, PR summaries, and always-visible stats. Claude and GitHub Copilot are tracked by default; add any other AI tool via `aiCoauthoringTracker.providers`.
 
-**Repository:** [0xC0DEM4M4N/vscode-extension-ai-coauthoring-tracker](https://github.com/0xC0DEM4M4N/vscode-extension-ai-coauthoring-tracker) · **Version:** 0.0.43
+**Repository:** [0xC0DEM4M4N/vscode-extension-ai-coauthoring-tracker](https://github.com/0xC0DEM4M4N/vscode-extension-ai-coauthoring-tracker) · **Version:** 0.0.44
 
 ## Highlights
 
