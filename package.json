@@ -1,0 +1,271 @@
+{
+  "name": "ai-coauthoring-tracker",
+  "displayName": "AI Co-Authoring Tracker",
+  "description": "Tracks AI-assisted edits in a repository and supports automatic co-author trailers via Git hooks. Requires the GitHub CLI (gh) for PR attribution summaries.",
+  "version": "0.0.43",
+  "publisher": "CodeMaman",
+  "icon": "images/avatar.png",
+  "galleryBanner": {
+    "color": "#000000",
+    "theme": "dark"
+  },
+  "private": false,
+  "repository": {
+    "type": "git",
+     "url": "https://github.com/0xC0DEM4M4N/vscode-extension-ai-coauthoring-tracker"
+  },
+  "engines": {
+    "vscode": "^1.92.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:aiCoauthoringTracker.selectProvider",
+    "onCommand:aiCoauthoringTracker.startProvider",
+    "onCommand:aiCoauthoringTracker.clear",
+    "onCommand:aiCoauthoringTracker.showStats",
+    "onCommand:aiCoauthoringTracker.resetStats",
+    "onCommand:aiCoauthoringTracker.refreshStats",
+    "onCommand:aiCoauthoringTracker.recalculateStats",
+    "onCommand:aiCoauthoringTracker.showBranchReport",
+    "onCommand:aiCoauthoringTracker.resetBranchStats",
+    "onCommand:aiCoauthoringTracker.resetAllStats",
+    "onCommand:aiCoauthoringTracker.previewCommitTrailer",
+    "onCommand:aiCoauthoringTracker.previewPrSummary",
+    "onCommand:aiCoauthoringTracker.createOrUpdatePullRequest",
+    "onCommand:aiCoauthoringTracker.createPullRequest",
+    "onCommand:aiCoauthoringTracker.updatePullRequest",
+    "onCommand:aiCoauthoringTracker.toggleDebugLogging",
+    "onCommand:aiCoauthoringTracker.installClaudeSignalHook",
+    "onCommand:aiCoauthoringTracker.reinstallHooksForThisRepo",
+    "onCommand:aiCoauthoringTracker.listInstalledRepos",
+    "onView:aiCoauthoringTrackerStats",
+    "onView:aiCoauthoringTrackerActionsPanel"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "aiCoauthoringTracker.selectProvider",
+        "title": "AI Co-Authoring Tracker: Select Provider"
+      },
+      {
+        "command": "aiCoauthoringTracker.startProvider",
+        "title": "AI Co-Authoring Tracker: Start/Switch Provider Attribution"
+      },
+      {
+        "command": "aiCoauthoringTracker.clear",
+        "title": "AI Co-Authoring Tracker: Clear Attribution"
+      },
+      {
+        "command": "aiCoauthoringTracker.showStats",
+        "title": "AI Co-Authoring Tracker: Show Character Stats"
+      },
+      {
+        "command": "aiCoauthoringTracker.resetStats",
+        "title": "AI Co-Authoring Tracker: Reset Character Stats (Active File)"
+      },
+      {
+        "command": "aiCoauthoringTracker.refreshStats",
+        "title": "AI Co-Authoring Tracker: Refresh Character Stats"
+      },
+      {
+        "command": "aiCoauthoringTracker.recalculateStats",
+        "title": "AI Co-Authoring Tracker: Recalculate Stats (From Git)"
+      },
+      {
+        "command": "aiCoauthoringTracker.showBranchReport",
+        "title": "AI Co-Authoring Tracker: Show Branch Report"
+      },
+      {
+        "command": "aiCoauthoringTracker.resetBranchStats",
+        "title": "AI Co-Authoring Tracker: Reset Attribution Data (Current Branch)"
+      },
+      {
+        "command": "aiCoauthoringTracker.resetAllStats",
+        "title": "AI Co-Authoring Tracker: Reset ALL Attribution Data (Every Branch)"
+      },
+      {
+        "command": "aiCoauthoringTracker.previewCommitTrailer",
+        "title": "AI Co-Authoring Tracker: Preview Commit Attribution Trailer"
+      },
+      {
+        "command": "aiCoauthoringTracker.previewPrSummary",
+        "title": "AI Co-Authoring Tracker: Preview PR Attribution Summary"
+      },
+      {
+        "command": "aiCoauthoringTracker.createOrUpdatePullRequest",
+        "title": "AI Co-Authoring Tracker: Create/Update Pull Request with AI Attribution"
+      },
+      {
+        "command": "aiCoauthoringTracker.createPullRequest",
+        "title": "AI Co-Authoring Tracker: Create Pull Request with AI Attribution"
+      },
+      {
+        "command": "aiCoauthoringTracker.updatePullRequest",
+        "title": "AI Co-Authoring Tracker: Update PR Description with AI Attribution"
+      },
+      {
+        "command": "aiCoauthoringTracker.toggleDebugLogging",
+        "title": "AI Co-Authoring Tracker: Toggle Debug Logging"
+      },
+      {
+        "command": "aiCoauthoringTracker.installClaudeSignalHook",
+        "title": "AI Co-Authoring Tracker: Install Claude Code Activity Hook"
+      },
+      {
+        "command": "aiCoauthoringTracker.reinstallHooksForThisRepo",
+        "title": "AI Co-Authoring Tracker: Reinstall/Update Git Hooks For This Repo"
+      },
+      {
+        "command": "aiCoauthoringTracker.listInstalledRepos",
+        "title": "AI Co-Authoring Tracker: List Repos With Git Hooks Installed"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "aiCoauthoringTrackerStats",
+          "name": "AI Attribution Stats",
+          "icon": "$(graph)"
+        }
+      ],
+      "aiCoauthoringTrackerPanel": [
+        {
+          "type": "webview",
+          "id": "aiCoauthoringTrackerActionsPanel",
+          "name": "AI Co-Authoring Tracker",
+          "icon": "$(sparkle)"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "AI Co-Authoring Tracker",
+      "properties": {
+        "aiCoauthoringTracker.autoDetect": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start an attribution session when a large, atomic multi-line edit is detected (typical of AI-applied changes like Copilot Edits 'Keep' or Claude Code diffs)."
+        },
+        "aiCoauthoringTracker.autoUpdatePrOnPush": {
+          "type": "boolean",
+          "default": true,
+          "description": "After you push the current branch, automatically refresh the AI attribution block in that branch's existing open pull request description (via `gh`). Update-only: it never creates a pull request."
+        },
+        "aiCoauthoringTracker.enableCharacterStats": {
+          "type": "boolean",
+          "default": true,
+          "description": "Track character-level manual/AI/paste attribution statistics per file."
+        },
+        "aiCoauthoringTracker.pasteThreshold": {
+          "type": "number",
+          "default": 10,
+          "description": "Minimum character count for a single-line insertion to be classified as a paste rather than typed/completed text."
+        },
+        "aiCoauthoringTracker.aiTimingThresholdMs": {
+          "type": "number",
+          "default": 50,
+          "description": "Multi-character insertions arriving faster than this (ms since the previous edit) are classified as AI completions rather than manual typing."
+        },
+        "aiCoauthoringTracker.immediateUndoWindowMs": {
+          "type": "number",
+          "default": 10000,
+          "description": "How soon (in ms) after a tracked AI/paste insertion an exact undo or delete of that same text reverses its character count instead of leaving it permanently attributed. Only reverses the single most recent tracked insertion per file, not an arbitrary chain of undos."
+        },
+        "aiCoauthoringTracker.debugLogging": {
+          "type": "boolean",
+          "default": false,
+          "description": "Log every tracked edit's size, classification, and attribution decision to the 'AI Co-Authoring Tracker Debug' output channel. Off by default; turn on to diagnose why an edit was (or wasn't) attributed the way you expected, then turn back off."
+        },
+        "aiCoauthoringTracker.gitOperationQuietWindowMs": {
+          "type": "number",
+          "default": 3000,
+          "description": "How long (in ms) after git locks or unlocks its index -- stash, stash pop, checkout, pull, merge, rebase, reset, or commit -- to ignore editor content changes entirely, since they're git rewriting files rather than someone typing, pasting, or an AI tool applying a diff."
+        },
+        "aiCoauthoringTracker.claudeSignalSessionProtectionMs": {
+          "type": "number",
+          "default": 30000,
+          "description": "How long (in ms) a session that the Claude Code activity-signal hook started or switched stays immune to being re-guessed by the weaker 'is the Copilot extension active' shape heuristic. After this elapses with no new signal, the next large AI-shaped edit is free to re-guess -- so switching from Claude Code to Copilot doesn't stay misattributed to Claude for the rest of the session."
+        },
+        "aiCoauthoringTracker.sessionTtlMs": {
+          "type": "number",
+          "default": 300000,
+          "description": "How long (in ms) an attribution session stays active with no further activity before it expires. Extended on every matching edit, so this is really 'how long a pause is tolerated before the active provider is lost' -- raise it if you regularly leave Claude Code or Copilot mid-task for several minutes at a time. Defaults to 5 minutes."
+        },
+        "aiCoauthoringTracker.providers": {
+          "type": "array",
+          "default": [
+            {
+              "id": "claude",
+              "label": "Claude",
+              "color": "#b180d7"
+            },
+            {
+              "id": "copilot",
+              "label": "Copilot",
+              "color": "#89d185",
+              "detectExtensionIds": [
+                "GitHub.copilot",
+                "GitHub.copilot-chat"
+              ]
+            }
+          ],
+          "description": "The AI providers this extension listens for and can attribute edits to. Claude and Copilot are included by default -- add an entry to track another tool (a custom id, a display label, and a hex color used everywhere that provider shows up: the sidebar, branch report, and commit/PR summaries). 'detectExtensionIds' is optional: list the VS Code extension id(s) that indicate this provider is active, so a large AI-shaped edit with no session running can be auto-attributed to it (Claude has none, and is used as the fallback when nothing else matches). An invalid or empty list falls back to the two defaults.",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "label",
+              "color"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Stable identifier for this provider -- stored in stats and commit trailers, so avoid renaming it once you have data recorded under it."
+              },
+              "label": {
+                "type": "string",
+                "description": "Display name shown in the sidebar, branch report, and PR/commit summaries."
+              },
+              "color": {
+                "type": "string",
+                "description": "Hex color (e.g. \"#b180d7\") used for this provider's bars, swatches, and stat tiles."
+              },
+              "detectExtensionIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "VS Code extension id(s) whose activity suggests this provider is in use, for auto-detection when no session is manually started."
+              }
+            }
+          }
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "aiCoauthoringTrackerPanel",
+          "title": "AI Co-Authoring Tracker",
+          "icon": "media/activity-icon.svg"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "build-install": "npm run build && rm -rf install/*.vsix && npm run package && mkdir -p install && mv *.vsix install/",
+    "lint": "echo \"No lint configured\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/vscode": "^1.92.0",
+    "typescript": "^5.6.3",
+    "@vscode/vsce": "^3.2.2"
+  }
+}

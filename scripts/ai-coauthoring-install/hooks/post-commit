@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Installed by AI Coauthoring. Snapshots current attribution totals as the baseline the next
+# commit's trailer will be diffed against. Never blocks anything -- failures are swallowed.
+
+NODE_BIN="$(command -v node || true)"
+if [ -z "$NODE_BIN" ]; then
+  exit 0
+fi
+
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+"$NODE_BIN" "$HOOK_DIR/attribution-hook.js" post-commit || true
+exit 0
